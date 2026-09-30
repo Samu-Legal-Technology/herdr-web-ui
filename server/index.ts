@@ -59,6 +59,7 @@ import { handleMachineRequest } from "./machine-api.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
 import { handleFleetReview } from "./fleet-review.ts";
+import { mayStreamPane, SELF_STREAM_PLACEHOLDER, streamOrPlaceholder } from "./self-stream.ts";
 
 const MAX_REPLAY_BYTES = 256 * 1024;
 /**
@@ -158,6 +159,7 @@ interface PaneAttachment {
   /** bounded tail so a client joining late still sees the current screen */
   replay: ReplayBuffer;
   stalled: Map<Client, number>;
+  pendingOutput: number;
 }
 
 function send(client: Client, message: ServerMessage): number {
@@ -202,6 +204,8 @@ export function createServer(
     alertTiming?: Partial<AlertTiming>;
     /** ATTACH_RETRY_FOR_MS; tests shorten it */
     attachRetryForMs?: number;
+    /** Isolated test fixture for terminal viewer detection. */
+    inspectStreamPane?: (paneId: string) => Promise<{ process_info?: { foreground_processes?: { argv?: string[] }[] } }>;
   } = {},
 ): { port: number; hostname: string; stop: () => void } {
   const attachments = new Map<string, PaneAttachment>();
@@ -321,7 +325,7 @@ export function createServer(
       }
     }
     if (attachments.get(paneId) !== attachment) return;
-    if (paused) attachment.pty.pause();
+    if (paused || attachment.pendingOutput > 0) attachment.pty.pause();
     else attachment.pty.resume();
   }
 
@@ -441,6 +445,7 @@ export function createServer(
       rows: spawnRows,
       replay: new ReplayBuffer(MAX_REPLAY_BYTES),
       stalled: new Map(),
+      pendingOutput: 0,
     };
     attachments.set(paneId, attachment);
 
@@ -451,11 +456,26 @@ export function createServer(
     // transcript matches): an attach that races one, typically a phone reconnecting just as
     // Codex finished an answer, is started again for the same clients, for as long as such
     // a read can last, instead of ending their terminal.
+    let outputQueue = Promise.resolve();
     const forward = (data: string): void => {
       if (attachments.get(paneId) !== attachment) return;
-      attachment.replay.append(data);
-      for (const client of attachment.clients) sendOutput(client, paneId, data);
-      reconcileOutput(paneId);
+      attachment.pendingOutput++;
+      attachment.pty.pause();
+      outputQueue = outputQueue.then(async () => {
+        if (attachments.get(paneId) !== attachment) return;
+        // Recheck every output chunk: a pane can launch terminal-browser after attach.
+        await streamOrPlaceholder(paneId, options.inspectStreamPane, () => {
+          if (attachments.get(paneId) !== attachment) return;
+          attachment.replay.append(data);
+          for (const client of attachment.clients) sendOutput(client, paneId, data);
+        }, () => {
+          for (const client of attachment.clients) send(client, { type: "pty-data", pane_id: paneId, data: SELF_STREAM_PLACEHOLDER });
+          closeAttachment(paneId);
+        });
+      }).finally(() => {
+        attachment.pendingOutput--;
+        if (attachments.get(paneId) === attachment && attachment.pendingOutput === 0) reconcileOutput(paneId);
+      });
     };
     let retries = 0;
     let refusedSince: number | null = null;
@@ -905,6 +925,9 @@ export function createServer(
       if (pathname === "/api/pane/read") {
         const paneId = url.searchParams.get("pane_id");
         if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+        if (!await mayStreamPane(paneId, options.inspectStreamPane)) {
+          return jsonResponse({ error: { code: "self_stream_excluded", message: SELF_STREAM_PLACEHOLDER.trim() } }, 403);
+        }
         const linesRaw = url.searchParams.get("lines");
         const lines = linesRaw === null ? undefined : Number(linesRaw);
         if (lines !== undefined && !Number.isFinite(lines)) {
@@ -1161,6 +1184,16 @@ export function createServer(
               const geometry = validGeometry(message.cols, message.rows);
               if (!geometry) {
                 send(client, { type: "error", code: "invalid_geometry", message: "cols and rows must be integers in 1..1000" });
+                break;
+              }
+              if (!await mayStreamPane(message.pane_id, options.inspectStreamPane)) {
+                // Never create or join a PTY for a pane displaying the viewer itself.
+                // This fixed response cannot contain any pane output or recurse.
+                if (client.data.attached.has(message.pane_id)) {
+                  client.data.attached.delete(message.pane_id);
+                  detach(message.pane_id, client);
+                }
+                send(client, { type: "pty-data", pane_id: message.pane_id, data: SELF_STREAM_PLACEHOLDER });
                 break;
               }
               // record the pane before the await: a detach (switching panes) or a close
