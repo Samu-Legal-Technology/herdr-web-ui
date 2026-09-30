@@ -1,0 +1,8 @@
+.fleet-review { width: 100%; height: 100%; overflow: auto; padding: 1.5rem; color: var(--text, #eee); }
+.fleet-review > header { display: flex; align-items: center; justify-content: space-between; }
+.fleet-review-card { max-width: 65rem; margin: 1rem 0; padding: 1rem 1.25rem; border: 1px solid var(--border, #555); border-radius: .6rem; }
+.fleet-review-card h3 { margin-top: 0; }
+.fleet-review-card label { display: block; margin: .75rem 0; }
+.fleet-review-card select, .fleet-review-card textarea { display: block; width: 100%; max-width: 38rem; margin-top: .25rem; padding: .5rem; color: inherit; background: var(--surface, #222); border: 1px solid var(--border, #555); border-radius: .3rem; }
+.fleet-review-card textarea { min-height: 5rem; }
+.fleet-review-card button, .fleet-review > header button { padding: .5rem .8rem; }

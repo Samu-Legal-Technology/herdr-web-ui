@@ -58,6 +58,7 @@ import { MachineManager } from "./machines.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
+import { handleFleetReview } from "./fleet-review.ts";
 
 const MAX_REPLAY_BYTES = 256 * 1024;
 /**
@@ -630,6 +631,15 @@ export function createServer(
       const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/push/test";
       if (readOnly && (fileRead || mutating && !ownPreferences)) {
         return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
+      }
+
+      if (pathname === "/api/fleet/review") {
+        // Presence by token is necessary here. Neither a loopback default grant
+        // nor a paired watch device may submit a legal decision.
+        if (token === "" || !isAuthenticated(request, token) ||
+            ip === null || !isLoopbackAddress(ip.address) ||
+            request.headers.has("x-forwarded-for") || readOnly) return unauthorizedJson();
+        return handleFleetReview(request);
       }
 
       if (pathname === "/api/bridge") {

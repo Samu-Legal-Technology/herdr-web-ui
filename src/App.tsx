@@ -39,6 +39,7 @@ import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
+import { FleetReview } from "./components/FleetReview.tsx";
 
 const APP_TITLE = "herdr web ui";
 const POLL_MS = 5000;
@@ -112,6 +113,7 @@ function Brand() {
 }
 
 export function App() {
+  const reviewMode = new URLSearchParams(window.location.search).get("review") === "1";
   const t = useT();
   const { settings, resolvedTheme, update: updateSettings } = useSettings();
   // this device's alert choices: sent with its push subscription, and applied to tab alerts here
@@ -612,6 +614,7 @@ export function App() {
           </div>
         )}
         <div className="header-meta">
+          <a href="/?review=1" target="_blank" rel="noopener noreferrer" title="Open decision review in its own tab">Review decisions</a>
           <span
             className={`conn ${connected ? "conn-live" : "conn-reconnecting"}`}
             role="status"
@@ -662,7 +665,7 @@ export function App() {
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
         <main className="terminal-host">
-          <PaneTerminal
+          {reviewMode ? <FleetReview /> : <PaneTerminal
             key={selectedMachineId}
             paneId={selectedPane?.restore_error ? null : selectedPaneId}
             restoreError={selectedPane?.restore_error ?? null}
@@ -676,7 +679,7 @@ export function App() {
             onRoleAck={setRole}
             onConnectionChange={(next) => { setConnected(next); if (next) setOutputStopped(false); }}
             onServerMessage={handleServerMessage}
-          />
+          />}
         </main>
         </OpenFileContext.Provider>
       </div>
